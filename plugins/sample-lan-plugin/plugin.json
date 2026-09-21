@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "sample-lan-probe",
+  "name": "示例：局域网探测",
+  "version": "1.0.0",
+  "runtime": "js",
+  "entry": "main.js",
+  "hostMinVersion": "2.0.0",
+  "description": "内置示例插件（第二个）。演示 Host.udp / Host.tcp / Host.tls 三组原始 socket 桥的用法：对局域网做一次 UDP 探测并把应答当作设备列出。不含任何厂商私有协议。",
+  "author": "miha 内置示例",
+  "homepage": "",
+  "license": "GPL-3.0-or-later",
+  "permissions": ["lan", "secureStore", "log"],
+  "login": {
+    "type": "form"
+  },
+  "capabilities": {
+    "homes": true,
+    "devices": true,
+    "scenes": false,
+    "spec": false,
+    "statistics": false,
+    "messages": false,
+    "consumables": false,
+    "lanControl": true,
+    "gatewayControl": false
+  },
+  "update": {
+    "source": "none",
+    "repo": "",
+    "assetPattern": ""
+  }
+}
