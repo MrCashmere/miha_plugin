@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "mijia-cloud",
+  "name": "米家（云端）",
+  "version": "1.0.8",
+  "runtime": "js",
+  "entry": "main.js",
+  "hostMinVersion": "2.0.0",
+  "description": "米家云端链路的内置实现。扫码登录后可读取家庭与设备、读写属性、执行动作。不含局域网与 MIPS 长连接控制（那部分留在宿主）。",
+  "author": "miha 内置示例",
+  "homepage": "",
+  "license": "GPL-3.0-or-later",
+  "permissions": ["network", "secureStore", "crypto", "log"],
+  "login": {
+    "type": "qr"
+  },
+  "capabilities": {
+    "homes": true,
+    "devices": true,
+    "scenes": false,
+    "spec": true,
+    "statistics": false,
+    "messages": false,
+    "consumables": false,
+    "lanControl": false,
+    "gatewayControl": false
+  },
+  "update": {
+    "source": "none",
+    "repo": "",
+    "assetPattern": ""
+  }
+}
