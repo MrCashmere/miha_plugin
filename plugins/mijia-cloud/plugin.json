@@ -2,15 +2,20 @@
   "schemaVersion": 1,
   "id": "mijia-cloud",
   "name": "米家（云端）",
-  "version": "1.0.8",
+  "version": "1.0.23",
   "runtime": "js",
   "entry": "main.js",
   "hostMinVersion": "2.0.0",
-  "description": "米家云端链路的内置实现。扫码登录后可读取家庭与设备、读写属性、执行动作。不含局域网与 MIPS 长连接控制（那部分留在宿主）。",
+  "description": "米家云端链路的内置实现。扫码登录后可读取家庭与设备、读写属性、执行动作，并支持摄像头实时画面（含取流形态诊断、动作返回体原文与抓包解密）与小米路由器的局域网管理。不含局域网直连与 MIPS 长连接（那部分留在宿主）。",
   "author": "miha 内置示例",
   "homepage": "",
   "license": "GPL-3.0-or-later",
-  "permissions": ["network", "secureStore", "crypto", "log"],
+  "permissions": [
+    "network",
+    "secureStore",
+    "crypto",
+    "log"
+  ],
   "login": {
     "type": "qr"
   },
@@ -23,7 +28,9 @@
     "messages": false,
     "consumables": false,
     "lanControl": false,
-    "gatewayControl": false
+    "gatewayControl": false,
+    "stream": true,
+    "gatewayAdmin": true
   },
   "update": {
     "source": "none",
