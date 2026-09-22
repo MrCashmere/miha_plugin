@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mijia-cloud",
   "name": "米家（云端）",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "runtime": "js",
   "entry": "main.js",
   "hostMinVersion": "2.0.0",

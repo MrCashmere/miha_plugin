@@ -1249,16 +1249,20 @@ async function queryP2pVendor(did, model, clientPublicHex) {
       const result = await request('/v2/device/miss_get_vendor', params, hosts[i], headers);
       let vendorId = null;
       let p2pId = '';
+      let initString = '';
       if (result && result.vendor && typeof result.vendor === 'object') {
         vendorId = result.vendor.vendor;
         const vp = result.vendor.vendor_params;
         if (vp && vp.p2p_id) p2pId = String(vp.p2p_id);
+        // init_string 是 P2P 信令服务器列表（加密编码），远程直连要用它解出服务器
+        if (vp && vp.init_string) initString = String(vp.init_string);
       }
       return {
         ok: true,
         host: hosts[i],
         vendorId: vendorId,
         p2pId: p2pId,
+        initString: initString,
         devicePublic: result && result.public_key ? String(result.public_key) : '',
         sign: result && result.sign ? String(result.sign) : '',
         publicKeyHex: publicKeyHex,
@@ -1285,10 +1289,12 @@ async function missPairOnce(device, did, clientPublicHex) {
       sign: probe.sign || '',
       // vendor=1（tutk）时的 P2P 寻址 id（云端 vendor_params.p2p_id）；cs2 为空
       uid: probe.p2pId || '',
+      // P2P 信令服务器列表（加密编码，宿主解出后走远程直连）；拿不到为空串
+      initString: probe.initString || '',
       error: probe.error || ''
     };
   } catch (e) {
-    return { ok: false, vendorId: -1, devicePublic: '', sign: '', uid: '',
+    return { ok: false, vendorId: -1, devicePublic: '', sign: '', uid: '', initString: '',
       error: String((e && e.message) || e) };
   }
 }
