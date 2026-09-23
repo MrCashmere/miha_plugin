@@ -5,6 +5,10 @@
 应用本体采用插件化架构：宿主只提供 JS 沙箱 + Host 桥（网络 / 加密存储 / 摘要 / 日志 / 局域网 socket），
 所有设备平台的数据源逻辑都由插件承担。只要有一个能跑通的设备平台
 （Home Assistant 集成、厂商开放云、自建网关都行），照着教程写一份 JS 插件，就能被宿主运行时安装并接管设备。
+当然，你甚至可以使用AI Agent来自行移植已有开源实现的项目到插件来使用。
+
+## AI Agent 开发插件实例
+涂鸦插件移植（[make-all/tuya-local](源仓库https://github.com/make-all/tuya-local)）：[MrCashmere/miha_tuya_plugin](https://github.com/MrCashmere/miha_tuya_plugin)
 
 ## 目录结构
 
