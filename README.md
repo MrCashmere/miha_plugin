@@ -8,7 +8,7 @@
 当然，你甚至可以使用AI Agent来自行移植已有开源实现的项目到插件来使用。
 
 ## AI Agent 开发插件实例
-涂鸦插件移植（[make-all/tuya-local](源仓库https://github.com/make-all/tuya-local)）：[MrCashmere/miha_tuya_plugin](https://github.com/MrCashmere/miha_tuya_plugin)
+涂鸦插件移植（源仓库[make-all/tuya-local](https://github.com/make-all/tuya-local)）：[MrCashmere/miha_tuya_plugin](https://github.com/MrCashmere/miha_tuya_plugin)
 
 ## 目录结构
 
