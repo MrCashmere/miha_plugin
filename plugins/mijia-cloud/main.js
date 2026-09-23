@@ -59,6 +59,15 @@ let passO = '';           // UA 里要用的一个随机段，同样固定
 let userAgent = '';
 let cookieJar = '';       // 登录期的 cookie（登录完就没用了）
 let pendingLp = '';       // 当前登录会话的长轮询地址
+/**
+ * 设备的房间归属缓存（getDevices 每次刷新后重建）。
+ *
+ * 云端 `gethome_merged` 的 roomlist 条目里 dids 成员表时有时无（不同固件/家庭
+ * 结构表现不一致），而宿主房间页的「N 台设备」和按房间列设备全靠它。这里按
+ * `room_id` / `home_id` 把设备归属记下来，getHomes 在云端没给 dids 时兜底 ——
+ * 语义对齐内建版 XiaomiCloudClient 的「按房间成员表反填设备归属」。
+ */
+let roomDidsCache = { byRoom: {}, byHome: {} };
 
 /**
  * 轮询间隔。宿主只在 `pollInterval > 0` 时才起轮询
@@ -885,6 +894,17 @@ function toDevice(raw, homeId) {
 
 function asArray(v) {
   return v instanceof Array ? v : [];
+}
+
+/** dids 语义的字符串数组：去重、丢空串，数字 did 也转成字符串（宿主按字符串比对）。 */
+function asStringArray(v) {
+  if (!(v instanceof Array)) return [];
+  const out = [];
+  for (let i = 0; i < v.length; i++) {
+    const s = String(v[i] || '');
+    if (s && out.indexOf(s) < 0) out.push(s);
+  }
+  return out;
 }
 
 function asNumber(v, fallback) {
@@ -2272,14 +2292,34 @@ Plugin.register({
         const id = String(raw.id || '');
         if (!id || seen.indexOf(id) >= 0) continue;
         seen.push(id);
+        const roomlist = asArray(raw.roomlist).map(function (r) {
+          const room = r || {};
+          const rid = String(room.id || '');
+          // 成员表优先用云端的；没带就用 getDevices 攒的归属缓存兜底
+          let dids = asStringArray(room.dids);
+          if (dids.length === 0 && roomDidsCache.byRoom[rid]) {
+            dids = roomDidsCache.byRoom[rid].slice();
+          }
+          return { id: rid, name: String(room.name || ''), dids: dids };
+        });
+        // 家庭级 dids：云端给就用云端的，否则聚合房间成员 + 直属设备的缓存
+        let dids = asStringArray(raw.dids);
+        if (dids.length === 0) {
+          const seenDid = {};
+          const merge = function (arr) {
+            for (let k = 0; k < arr.length; k++) {
+              if (!seenDid[arr[k]]) { seenDid[arr[k]] = true; dids.push(arr[k]); }
+            }
+          };
+          for (let k = 0; k < roomlist.length; k++) merge(roomlist[k].dids);
+          if (roomDidsCache.byHome[id]) merge(roomDidsCache.byHome[id]);
+        }
         homes.push({
           id: id,
           name: String(raw.name || id),
           uid: String(raw.uid || ''),
-          dids: [],
-          roomlist: asArray(raw.roomlist).map(function (r) {
-            return { id: String(r.id || ''), name: String(r.name || '') };
-          })
+          dids: dids,
+          roomlist: roomlist
         });
       }
     }
@@ -2328,6 +2368,25 @@ Plugin.register({
         startDid = maxDid;
       }
     }
+
+    // 重建房间归属缓存：getHomes 在云端没带 roomlist.dids 时靠它兜底
+    const byRoom = {};
+    const byHome = {};
+    const dids = Object.keys(out);
+    for (let i = 0; i < dids.length; i++) {
+      const device = out[dids[i]];
+      const rid = String(device.room_id || '');
+      const hid = String(device.home_id || '');
+      if (rid) {
+        if (!byRoom[rid]) byRoom[rid] = [];
+        byRoom[rid].push(String(dids[i]));
+      }
+      if (hid) {
+        if (!byHome[hid]) byHome[hid] = [];
+        byHome[hid].push(String(dids[i]));
+      }
+    }
+    roomDidsCache = { byRoom: byRoom, byHome: byHome };
 
     await Host.log.info('mijia', '载入 ' + Object.keys(out).length + ' 个设备');
     return out;
