@@ -15,6 +15,8 @@ plugins/
   mijia-cloud/          ← 米家云端插件（完整实现，扫码登录，v1.0.8）
   sample-plugin/        ← 最小示例：form 登录的只读云插件（对应教程 §12）
   sample-lan-plugin/    ← 局域网探测示例：Host.udp 原始 socket 桥用法（对应教程 §12.1）
+skills/
+  miha-plugin-dev/      ← 给 AI 助手用的插件开发 Skill（见下）
 ```
 
 ## 安装插件
@@ -39,6 +41,36 @@ zip -r ../../mijia-cloud-1.0.8.zip .
 从 [`docs/插件开发指南.md`](docs/插件开发指南.md) 开始。纯 REST 云 API 约半天到一天可以移植一个平台；
 带局域网私有协议约一周。写完可对照 `plugins/mijia-cloud/`（完整真实实现）和
 `plugins/sample-plugin/`（最小可运行示例）校准写法。
+
+## 给 AI 助手用的 Skill
+
+[`skills/miha-plugin-dev/`](skills/miha-plugin-dev/SKILL.md) 是一份可直接被 AI Agent
+加载的**插件开发 Skill**：把上手指南、协议速查、`Host` 桥陷阱、故障排查表整理成
+「主入口 + 分册参考」的结构，让 AI 不用读完 1500 行原文就能写出正确的插件。
+
+```
+skills/miha-plugin-dev/
+├── SKILL.md                        # 主入口：心智模型、十条铁律、7 步开发流程、交付检查清单
+└── references/
+    ├── protocol.md                 # plugin.json 全字段、生命周期钩子、数据面、Device 形状
+    ├── host-bridge.md              # Host.http/secureStore/crypto/udp/tcp/tls 的用法与陷阱
+    └── troubleshooting.md          # 症状 → 定位表、宿主机制对插件的影响
+```
+
+**怎么用**：把它复制到你的 AI 助手认识的位置即可，例如
+
+```bash
+# WorkBuddy / 通用做法：放到用户级 skills 目录
+cp -r skills/miha-plugin-dev ~/.workbuddy/skills/
+
+# Claude Code：放到项目的 .claude/skills/ 下
+mkdir -p .claude/skills && cp -r skills/miha-plugin-dev .claude/skills/
+```
+
+之后问它「帮我给 XX 平台写个 miha 插件」「这个插件为什么装进去不动」，
+它会自动加载这份 Skill。
+
+> 分册是从开发指南摘出来的**速查**，与原文冲突时以 `docs/插件开发指南.md` 为准。
 
 ## License
 
