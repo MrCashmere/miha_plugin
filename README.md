@@ -33,7 +33,7 @@ skills/
 
 ```bash
 cd plugins/mijia-cloud
-zip -r ../../mijia-cloud-1.0.8.zip .
+zip -r ../../mijia-cloud-1.0.25.zip .
 ```
 
 ## 教程
