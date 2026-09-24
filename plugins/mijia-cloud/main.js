@@ -951,10 +951,17 @@ function isSharedDevice(raw) {
   const selfUid = auth ? String(auth.userId || '') : '';
   const itemUid = String(item.uid === undefined || item.uid === null ? '' : item.uid);
   if (selfUid.length > 0 && itemUid.length > 0 && itemUid !== selfUid) return true;
+  /*
+   * ⚠️ 只排除明确为「否」的值，其余一律算命中：第三方（Do1e/mijia-api）是 Python
+   * truthy 判定，而 `owner` 到底给的是布尔还是对象、还是**对方的 uid 字符串**
+   * 都没钉死。写死 `=== true` 会在它是字符串时全部漏掉（真机 1.0.26 就是这个坑）。
+   * 判宽是安全的：多带出来的要么是自家设备，会被调用方按 did 去重吃掉。
+   */
   const owner = item.owner;
-  if (owner === true || owner === 1 || owner === '1' || owner === 'true') return true;
-  if (owner !== null && owner !== undefined && typeof owner === 'object') return true;
-  return false;
+  if (owner === null || owner === undefined) return false;
+  if (owner === false || owner === 0 || owner === '') return false;
+  if (owner === 'false' || owner === '0') return false;
+  return true;
 }
 
 /** 共享设备对象 → 宿主设备形状（强制归到虚拟家庭，并抹掉对方家庭的房间号） */
