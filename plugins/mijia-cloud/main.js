@@ -663,18 +663,39 @@ async function request(uri, data, host, extraHeaders) {
    * 真机 App 的做法是拿 passToken 静默换一个新的 serviceToken，全程不用扫码。
    * 这里对齐它：续期成功就重发本次请求；续期失败才真正报「请重新登录」。
    */
+  let renewed = false;
+  let preview401 = '';
   if (out.res.status === 401) {
-    const preview = String(out.res.body || '').trim().slice(0, 150);
-    await Host.log.error('mijia', '接口 401（' + uri + '）: ' + preview).catch(function () {});
+    preview401 = String(out.res.body || '').trim().slice(0, 150);
+    await Host.log.error('mijia', '接口 401（' + uri + '）: ' + preview401).catch(function () {});
     if (await refreshServiceToken()) {
+      renewed = true;
       out = await requestOnce(uri, data, host, extraHeaders);
+      if (out.res.status === 401) {
+        preview401 = String(out.res.body || '').trim().slice(0, 150);
+        await Host.log.error('mijia', '续期后仍 401（' + uri + '）: ' + preview401).catch(function () {});
+      }
     }
   }
 
   const res = out.res;
   const nonce = out.nonce;
   const signedNonce = out.signedNonce;
-  if (res.status === 401) throw new Error('登录已失效，请重新扫码登录（passToken 续期也没成功）');
+  if (res.status === 401) {
+    /*
+     * 401 有两种完全不同的成因，报同一句「登录已失效」会毁掉排查：
+     *   · 续期都失败            —— 真·登录失效，得重新扫码；
+     *   · 续期成功、重发仍 401  —— 凭据是新的，说明云端是**拒绝这个请求本身**
+     *     （典型：设备不属于当前账号，共享设备常常卡在这里）。
+     * 两种都把云端回的原文带上 —— 用户截图就能定位，不用再去要日志。
+     */
+    const tail = preview401 ? '　云端：' + preview401 : '';
+    if (renewed) {
+      throw new Error('云端拒绝了这个请求（' + uri + '）：登录凭据刚刷新过仍然 401，'
+        + '不是登录失效，通常是这台设备不在当前账号的权限内。' + tail);
+    }
+    throw new Error('登录已失效，请重新扫码登录（passToken 续期也没成功）　接口：' + uri + tail);
+  }
   if (res.status !== 200) throw new Error('米家接口 HTTP ' + res.status);
 
   const body = String(res.body || '');
@@ -2447,6 +2468,10 @@ Plugin.register({
 
     for (let h = 0; h < homes.length; h++) {
       const home = homes[h];
+      // 虚拟家庭不是真家庭：它的 id 是 `__shared__`，Number() 之后是 NaN，
+      // 拿去请求 home_device_list 只会换来一次无意义（甚至 401）的调用。
+      // 共享设备由下面的 fetchSharedDevices 单独收，这里必须跳过。
+      if (home.id === SHARED_HOME_ID) continue;
       let startDid = '';
       // 分页：服务端一次最多给一批，靠 max_did 续
       for (let page = 0; page < 20; page++) {
