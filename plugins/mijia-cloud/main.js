@@ -70,6 +70,28 @@ let pendingLp = '';       // 当前登录会话的长轮询地址
 let roomDidsCache = { byRoom: {}, byHome: {} };
 
 /**
+ * 「设备级共享」的虚拟家庭 id。
+ *
+ * 别人把**单台设备**共享给我时，它不属于任何一个家庭 —— `gethome_merged`
+ * 的三路家庭列表里都找不到它，云端把它放在独立接口
+ * `/v2/home/device_list_page` 里（不带 home_id / home_owner）。可宿主首页是
+ * 按 `homeId` 过滤设备的（`device.homeId === selectedHomeId`，默认选第一个
+ * 家庭），没有 homeId 的设备在任何具体家庭下都会被滤掉，只剩「全部设备」能
+ * 看到。所以给它编一个虚拟家庭，让它能像普通家庭一样被选中 —— 与米家 App
+ * 里「共享设备」的独立分组语义一致。
+ */
+const SHARED_HOME_ID = '__shared__';
+const SHARED_HOME_NAME = '共享设备';
+
+/**
+ * 共享设备的 did 列表（getDevices 每次刷新后重建，getHomes 拿它填虚拟家庭）。
+ *
+ * 首次加载为空 ⇒ 虚拟家庭要二次刷新才出现，与 `roomDidsCache` 的兜底时机
+ * 一致（宿主快照是先 getHomes 后 getDevices，第一趟拿不到任何缓存）。
+ */
+let sharedDidsCache = [];
+
+/**
  * 轮询间隔。宿主只在 `pollInterval > 0` 时才起轮询
  * （见 `PluginManager.beginLogin`），写 0 或省略 = 永远不轮询、
  * 二维码挂在那儿没人扫，是很容易踩的坑。
@@ -889,6 +911,81 @@ function toDevice(raw, homeId) {
   if (out.home_id === undefined || out.home_id === '') {
     out.home_id = homeId;
   }
+  return out;
+}
+
+/**
+ * 判定 `device_list_page` 返回的一条是不是「别人共享给我的设备」。
+ *
+ * ⚠️ 两个判据都是**推测**，真机上还没钉死：
+ *   ① `uid` 不是自己的 uid —— 设备归属别人，那它出现在我这里只能是共享来的；
+ *   ② `owner` 命中 —— 第三方实现（Do1e/mijia-api）就按 truthy 过滤它，但
+ *      这个字段是布尔还是对象、语义是「我拥有」还是「别人拥有」尚未验证。
+ *
+ * 任一成立即收录，再由调用方按 did 去重 —— 就算判宽了，也只会多带出已经在
+ * 家庭里出现过的设备（会被去重吃掉），不会把自有设备重复显示一遍。
+ */
+function isSharedDevice(raw) {
+  const item = raw || {};
+  const selfUid = auth ? String(auth.userId || '') : '';
+  const itemUid = String(item.uid === undefined || item.uid === null ? '' : item.uid);
+  if (selfUid.length > 0 && itemUid.length > 0 && itemUid !== selfUid) return true;
+  const owner = item.owner;
+  if (owner === true || owner === 1 || owner === '1' || owner === 'true') return true;
+  if (owner !== null && owner !== undefined && typeof owner === 'object') return true;
+  return false;
+}
+
+/** 共享设备对象 → 宿主设备形状（强制归到虚拟家庭，并抹掉对方家庭的房间号） */
+function toSharedDevice(raw) {
+  const out = toDevice(raw, SHARED_HOME_ID);
+  if (!out) return null;
+  // 共享设备可能带着对方家庭的 home_id / room_id：不覆盖的话宿主会按那个
+  // homeId 过滤，而那个家庭根本不在我的家庭列表里 ⇒ 设备照样不显示
+  out.home_id = SHARED_HOME_ID;
+  // 对方的房间号在我这边没有对应房间实体，留着会让房间页多出一个幽灵房间
+  out.room_id = '';
+  return out;
+}
+
+/**
+ * 拉「设备级共享」的设备（别人单台共享给我的）。
+ *
+ * 与家庭设备是**两个独立数据源**，结果必须相加：`/home/home_device_list`
+ * 只返回「某家庭下」的设备，共享设备不属于任何家庭，走的是
+ * `/v2/home/device_list_page` —— 不带 home_id / home_owner，返回键是 `list`
+ * 而不是 `device_info`。第三方实现（Do1e/mijia-api）就是把两个接口的结果
+ * 相加；小米官方 HA 集成 v0.1.0 也踩过同一个坑（共享家庭能列出、设备数为 0）。
+ *
+ * 取不到时返回空数组：共享设备是加分项，不该拖垮整份设备列表。
+ */
+async function fetchSharedDevices() {
+  let result;
+  try {
+    result = await request('/v2/home/device_list_page', {
+      ssid: '<unknown ssid>',
+      bssid: '02:00:00:00:00:00',
+      getVirtualModel: true,
+      getHuamiDevices: 1,
+      get_split_device: true,
+      support_smart_home: true,
+      get_cariot_device: true,
+      get_third_device: true,
+      get_phone_device: true,
+      get_miwear_device: true
+    });
+  } catch (e) {
+    await Host.log.error('mijia', '取共享设备失败 ' + String(e));
+    return [];
+  }
+  const list = asArray(result && result.list);
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i] || {};
+    if (isSharedDevice(item)) out.push(item);
+  }
+  await Host.log.info('mijia',
+    '共享接口返回 ' + list.length + ' 条，判定为共享 ' + out.length + ' 台');
   return out;
 }
 
@@ -2323,6 +2420,22 @@ Plugin.register({
         });
       }
     }
+    /*
+     * 设备级共享的虚拟家庭。
+     *
+     * 只在确实拉到过共享设备时才挂上去（`sharedDidsCache` 由上一次 getDevices
+     * 填充）—— 没有共享设备的用户不该凭空多出一个空家庭。
+     * 首次加载缓存为空 ⇒ 要刷新一次才出现，与房间 dids 兜底的时机一致。
+     */
+    if (sharedDidsCache.length > 0) {
+      homes.push({
+        id: SHARED_HOME_ID,
+        name: SHARED_HOME_NAME,
+        uid: auth ? String(auth.userId || '') : '',
+        dids: sharedDidsCache.slice(),
+        roomlist: []
+      });
+    }
     return homes;
   },
 
@@ -2387,6 +2500,20 @@ Plugin.register({
       }
     }
     roomDidsCache = { byRoom: byRoom, byHome: byHome };
+
+    // 设备级共享：独立数据源，与上面的家庭设备**相加**，不是替代
+    const sharedDids = [];
+    const shared = await fetchSharedDevices();
+    for (let i = 0; i < shared.length; i++) {
+      const device = toSharedDevice(shared[i]);
+      if (!device) continue;
+      const did = String(device.did);
+      // 已在某个家庭里出现过 → 不重复收录（判据判宽时的兜底，见 isSharedDevice）
+      if (!did || out[did]) continue;
+      out[did] = device;
+      sharedDids.push(did);
+    }
+    sharedDidsCache = sharedDids;
 
     await Host.log.info('mijia', '载入 ' + Object.keys(out).length + ' 个设备');
     return out;
