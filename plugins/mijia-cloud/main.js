@@ -513,8 +513,24 @@ function paramsToObj(params) {
 
 /* ================================================================ HTTP */
 
-function apiHeaders() {
+/**
+ * 通用数据面 cookie。抽出来是因为摄像头那套接口要在它后面**再拼一项**
+ * （见 queryP2pVendor）：只有 cUserId（加密形式）时服务端认不出账号。
+ */
+function baseCookie() {
   const countryCode = LOCALE.indexOf('_') >= 0 ? LOCALE.split('_')[1] : 'CN';
+  return [
+    'cUserId=' + auth.cUserId,
+    'yetAnotherServiceToken=' + auth.serviceToken,
+    'serviceToken=' + auth.serviceToken,
+    'channel=MI_APP_STORE',
+    'countryCode=' + countryCode,
+    'PassportDeviceId=' + auth.deviceId,
+    'locale=' + auth.locale
+  ].join(';');
+}
+
+function apiHeaders() {
   return {
     'User-Agent': auth.userAgent,
     'accept-encoding': 'identity',
@@ -522,15 +538,7 @@ function apiHeaders() {
     'miot-accept-encoding': 'identity',
     'miot-encrypt-algorithm': 'ENCRYPT-RC4',
     'x-xiaomi-protocal-flag-cli': 'PROTOCAL-HTTP2',
-    'Cookie': [
-      'cUserId=' + auth.cUserId,
-      'yetAnotherServiceToken=' + auth.serviceToken,
-      'serviceToken=' + auth.serviceToken,
-      'channel=MI_APP_STORE',
-      'countryCode=' + countryCode,
-      'PassportDeviceId=' + auth.deviceId,
-      'locale=' + auth.locale
-    ].join(';')
+    'Cookie': baseCookie()
   };
 }
 
@@ -548,11 +556,16 @@ function apiHeaders() {
  * 换域名不影响签名 —— 参与签名的只有**路径**，不含 host；
  * 但摄像头业务网关会额外校验 `miot-request-model` 这类头，必须能带上。
  */
-async function requestOnce(uri, data, host, extraHeaders) {
+async function requestOnce(uri, data, host, extraHeaders, signUri) {
   const nonce = await genNonce();
   const signedNonce = await getSignedNonce(auth.ssecurity, nonce);
+  /*
+   * `signUri` 是给「请求路径 ≠ 签名路径」的接口留的：典型是摄像头那套
+   * `/app/...` 接口 —— 请求要带 `/app` 前缀，签名却必须**不带**
+   * （带上了云端回 invalid signature）。默认两者相同，普通接口不受影响。
+   */
   const params = await buildEncParams(
-    uri, 'POST', signedNonce, nonce,
+    signUri || uri, 'POST', signedNonce, nonce,
     [{ key: 'data', value: JSON.stringify(data) }],
     auth.ssecurity
   );
@@ -653,10 +666,10 @@ async function refreshServiceToken() {
   return refreshInFlight;
 }
 
-async function request(uri, data, host, extraHeaders) {
+async function request(uri, data, host, extraHeaders, signUri) {
   if (!auth) throw new Error('未登录');
 
-  let out = await requestOnce(uri, data, host, extraHeaders);
+  let out = await requestOnce(uri, data, host, extraHeaders, signUri);
 
   /*
    * 401 不再直接判「登录失效」。serviceToken 是会过期的（passToken 通常活得更久），
@@ -670,7 +683,7 @@ async function request(uri, data, host, extraHeaders) {
     await Host.log.error('mijia', '接口 401（' + uri + '）: ' + preview401).catch(function () {});
     if (await refreshServiceToken()) {
       renewed = true;
-      out = await requestOnce(uri, data, host, extraHeaders);
+      out = await requestOnce(uri, data, host, extraHeaders, signUri);
       if (out.res.status === 401) {
         preview401 = String(out.res.body || '').trim().slice(0, 150);
         await Host.log.error('mijia', '续期后仍 401（' + uri + '）: ' + preview401).catch(function () {});
@@ -1374,24 +1387,55 @@ async function queryP2pVendor(did, model, clientPublicHex) {
   };
 
   /*
-   * 域名试两条，顺序有讲究：
-   *   · api.mijia.tech —— 本插件平时走的（米家 App 的域名，接口最全）
-   *   · api.io.mi.com  —— go2rtc 走的（米家开放平台域名）
-   * 同一个米家云、同一套签名，但**接口不保证在两边都暴露**。
-   * 先试自己这条，不行再试它那条；两条都不行，才是真的不行。
+   * 第一顺位用的请求头与现状**逐字节一致**，不带任何新东西 —— 自有摄像头一直是
+   * 这么成功的，动它就是把本来能取流的设备拿去冒险。
    */
-  const hosts = [API_HOST, 'https://api.io.mi.com/app'];
+  const plainHeaders = model ? { 'miot-request-model': String(model) } : undefined;
   /*
-   * 米家 App 调摄像头业务接口时会带 `miot-request-model`，这里照做 ——
-   * 云端的接口鉴权有时会看这个头（`/perf/camera/...` 那条抓包就是明证）。
-   * 带了不亏，真机上万一被挑出来，至少不是我们少发了东西。
+   * 兜底候选才上增强头，两条都是实测钉死的（docs §13.1 / §13 踩坑 2）：
+   *   · 🔴 cookie 必须含**明文 `userId=<小米ID>`** —— 只有 `cUserId`（加密形式）
+   *     时服务端认不出账号，直接回 `code:2 auth error`。这次共享设备摄像头报
+   *     「登录已失效」就是栽在这：登录好好的，是这条请求没带账号标识。
+   *   · `miot-request-model`：米家 App 调摄像头业务接口时会带，云端鉴权会看。
    */
-  const headers = model ? { 'miot-request-model': String(model) } : undefined;
+  const authHeaders = { 'Cookie': baseCookie() + ';userId=' + String(auth.userId || '') };
+  if (model) authHeaders['miot-request-model'] = String(model);
+  /*
+   * 候选按「先原样、再正确域名」排 —— 顺序不能动：
+   *   ① api.mijia.tech + /v2/...        —— **现状**。自有摄像头一直走这条成功，
+   *      必须保持第一顺位，否则就是拿本来能取流的设备去冒险；
+   *   ② core.api.mijia.tech + /app/...  —— docs/CS2远程取流逆向与实现.md §13
+   *      实测钉死的**正确组合**：国内摄像头接口只认这个域名，而且请求路径要带
+   *      `/app`、签名路径**不能带**（带上了是 invalid signature）；
+   *   ③ api.io.mi.com + /app/...        —— 开放平台域名，对本 cookie 一律 401，
+   *      放最后只为在都失败时留个对照。
+   *
+   * 🔴 报错必须挑「最有信息量的那条」：②/③ 那种 401 是**域名不对**造出来的噪音，
+   * 它会盖住 ① 返回的真实业务错误（典型：设备不属于当前账号时云端给的 auth
+   * error / code:-8），让用户看到一句假的「登录已失效」。所以优先保留第一个
+   * 非 401 的错误当真因，全是 401 时才报 401。
+   */
+  const candidates = [
+    { host: API_HOST, uri: '/v2/device/miss_get_vendor', signUri: '', headers: plainHeaders },
+    { host: 'https://core.api.mijia.tech', uri: '/app/v2/device/miss_get_vendor', signUri: '/v2/device/miss_get_vendor', headers: authHeaders },
+    { host: 'https://api.io.mi.com', uri: '/app/v2/device/miss_get_vendor', signUri: '/v2/device/miss_get_vendor', headers: authHeaders }
+  ];
   let lastError = '';
+  let realError = '';   // 第一个非 401 的错误 —— 那才是这台设备的真实问题
 
-  for (let i = 0; i < hosts.length; i++) {
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
     try {
-      const result = await request('/v2/device/miss_get_vendor', params, hosts[i], headers);
+      const result = await request(c.uri, params, c.host, c.headers, c.signUri);
+      /*
+       * 云端会在**业务体**里给非零 code（HTTP 可是 200）。不加这道检查的话，
+       * `result.vendor` 不存在就会被当成「这台设备没有 P2P 厂商」，
+       * 真正的 auth error / 无权限就这么被吞掉了。
+       */
+      if (result && result.code !== undefined && result.code !== null && Number(result.code) !== 0) {
+        throw new Error('云端 code=' + result.code
+          + '（' + String(result.message || '无说明') + '）');
+      }
       let vendorId = null;
       let p2pId = '';
       let initString = '';
@@ -1404,7 +1448,7 @@ async function queryP2pVendor(did, model, clientPublicHex) {
       }
       return {
         ok: true,
-        host: hosts[i],
+        host: c.host,
         vendorId: vendorId,
         p2pId: p2pId,
         initString: initString,
@@ -1414,10 +1458,16 @@ async function queryP2pVendor(did, model, clientPublicHex) {
         privateKeyHex: privateKeyHex
       };
     } catch (e) {
-      lastError = String((e && e.message) || e);
+      const msg = String((e && e.message) || e);
+      lastError = msg;
+      // 401 大半是域名/路径不对造出来的（尤其 api.io.mi.com 那一条），
+      // 它不该盖住第一条候选返回的真实业务错误
+      if (!realError && msg.indexOf('401') < 0 && msg.indexOf('登录已失效') < 0) {
+        realError = msg;
+      }
     }
   }
-  return { ok: false, error: lastError, publicKeyHex: publicKeyHex };
+  return { ok: false, error: realError || lastError, publicKeyHex: publicKeyHex };
 }
 
 /**
