@@ -19,8 +19,8 @@ ArkWeb 的 JS 沙箱 + 一套原生桥（`Host`），**所有设备平台的数�
 
 > 官方仓库：<https://github.com/MrCashmere/miha_plugin>
 > 完整教程：`docs/插件开发指南.md`（协议 v1，唯一的权威来源）
-> 真实实现：`plugins/mijia-cloud/`（米家云端，扫码登录 + 取流 + 网关管理，≈700 行单文件）
 > 最小样例：`plugins/sample-plugin/`（form 登录只读云插件）、`plugins/sample-lan-plugin/`（UDP 探测）
+> 厂商云端链路（扫码登录 / 取流 / 网关管理）属厂商专属能力，仓库不提供源码，请对照目标平台开放文档自行移植
 
 **写插件之前先做一件事**：把 `plugins/sample-plugin/main.js` 从头读一遍。
 它是「注册 → 读凭据 → 登录 → 拉设备 → 控制」的最小可运行闭环，注释里写满了踩过的坑。
@@ -155,7 +155,7 @@ MQTT 也没有开箱支持 —— 要连 broker 得用 `Host.tls` 自己拼报�
 | 有二维码/OAuth/表单登录，或需要 Cookie 会话 | `runtime: "js"`，自己实现 `login*` |
 | 局域网私有二进制协议（miio、自定义 UDP） | `runtime: "js"` + `Host.udp` / `Host.tcp` |
 | 需要 MQTT 长连接 | `runtime: "js"` + `Host.tls`，自己实现 MQTT 帧 |
-| 米家体系 | 直接抄 `plugins/mijia-cloud/` |
+| 厂商私有云 / 需要抓包还原的接口 | `runtime: "js"`，按抓包结果自己实现签名与会话；优先移植社区已有开源实现 |
 
 工作量的经验值：**纯 REST 云 API 约半天到一天；带局域网私有协议约一周。**
 

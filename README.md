@@ -16,7 +16,6 @@
 docs/
   插件开发指南.md        ← 插件协议 v1 完整开发教程（清单、登录视图、Host 桥、调试方法）
 plugins/
-  mijia-cloud/          ← 米家云端插件（完整实现，扫码登录，v1.0.8）
   sample-plugin/        ← 最小示例：form 登录的只读云插件（对应教程 §12）
   sample-lan-plugin/    ← 局域网探测示例：Host.udp 原始 socket 桥用法（对应教程 §12.1）
 skills/
@@ -36,15 +35,15 @@ skills/
 插件目录就是一个普通的 zip（根下含 `plugin.json` + `main.js`）：
 
 ```bash
-cd plugins/mijia-cloud
-zip -r ../../mijia-cloud-1.0.25.zip .
+cd plugins/sample-plugin
+zip -r ../../sample-plugin-1.0.0.zip .
 ```
 
 ## 教程
 
 从 [`docs/插件开发指南.md`](docs/插件开发指南.md) 开始。纯 REST 云 API 约半天到一天可以移植一个平台；
-带局域网私有协议约一周。写完可对照 `plugins/mijia-cloud/`（完整真实实现）和
-`plugins/sample-plugin/`（最小可运行示例）校准写法。
+带局域网私有协议约一周。写完可对照 `plugins/sample-plugin/`（最小可运行示例）与
+`plugins/sample-lan-plugin/`（局域网探测示例）校准写法。
 
 ## 给 AI 助手用的 Skill
 
