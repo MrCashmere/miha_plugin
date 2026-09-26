@@ -3,12 +3,13 @@ name: miha-plugin-dev
 description: >-
   为「羊绒家居 / miha」（HarmonyOS 宿主）编写、调试、打包 JS 插件；把 Home Assistant 集成、
   厂商开放云、自建网关的数据源逻辑移植成 miha 插件；排查「装进去就不动」「插件未能加载」
-  「设备显示离线」这类插件侧故障。覆盖 plugin.json 清单与 capabilities 承诺、Plugin.register
-  生命周期钩子、Host 原生桥（http / httpForm / secureStore / crypto / log / udp / tcp / tls）、
-  三种登录视图（qr / web / form）、设备数据面形状与 MIoT 能力描述、stream 取流与 gatewayAdmin
-  网关管理，以及打包发布到 GitHub Release 的完整流程。
+  「设备显示离线」这类插件侧故障。覆盖 plugin.json 清单（capabilities 承诺、minAppVersionCode）、
+  Plugin.register 生命周期钩子、Host 原生桥（http / httpForm / secureStore / settings / crypto /
+  log / udp / tcp / tls）、三种登录视图（qr / web / form）、声明式设置面板（settings 控件与
+  onSettingsChanged / onSettingsAction）、设备数据面形状与 MIoT 能力描述、stream 取流与
+  gatewayAdmin 网关管理，以及打包发布到 GitHub Release 的完整流程。
   触发词：miha 插件、羊绒家居、写个插件、插件开发指南、plugin.json、Plugin.register、Host.http、
-  Host.secureStore、Host.udp、扫码登录插件、移植 HA 集成、插件打包、插件调试。
+  Host.secureStore、Host.settings、插件设置、扫码登录插件、移植 HA 集成、插件打包、插件调试。
 license: GPL-3.0-or-later
 ---
 
@@ -59,7 +60,7 @@ my-platform-1.0.0.zip
 
 ---
 
-## 1. 十条铁律（违反其一 = 直接失败或静默失效）
+## 1. 十一条铁律（违反其一 = 直接失败或静默失效）
 
 按"踩坑代价"排序。**每一条都在真机上真实发生过。**
 
@@ -117,7 +118,7 @@ my-platform-1.0.0.zip
 长轮询超时、网络抖动都属于正常情况，一律按 `pending` 返回。
 真正该报错的是「二维码过期」→ `expired`，或凭据不合法 → `error`。
 
-### 🔴 8. `secureStore.get()` 读回来**可能已经是对象**
+### 🔴 8. `secureStore.get()` / `Host.settings.all()` 读回来**可能已经是对象**
 
 `set(key, value)` 的 value 必须是字符串；但桥的拆包层发现存的字符串以 `{` 或 `[` 开头时，
 会**直接 parse 成对象**返回。所以：
@@ -129,6 +130,9 @@ const data = (typeof stored === 'string') ? JSON.parse(stored) : stored;  // ✅
 ```
 
 只写 `JSON.parse(stored)` 的后果：`init()` 静默 `return false`，登录后家庭 / 设备全空。
+
+`Host.settings.all()` 踩的是**同一个坑**：它的返回值是**键值对象**，再套 `JSON.parse`
+会抛「不是合法 JSON」，`init` 一样静默失败。
 
 ### 🔴 9. 没有 `Host.crypto.rc4`，也没有宿主级 MQTT
 
@@ -142,6 +146,17 @@ MQTT 也没有开箱支持 —— 要连 broker 得用 `Host.tls` 自己拼报�
 - `init()` 必须**幂等**（别重复开 socket、别重复建定时器）
 - **不要**在模块顶层注册"只做一次"的东西
 - socket 回调**必须在 `init()` 里重新注册** —— 回调注册表在页面重建后会清空
+
+### 🔴 11. 设置（`settings`）是**声明**，写入权在宿主 —— 插件只读
+
+`plugin.json` 里写了 `settings.items` 就会出现「设置」按钮，但**值由用户在宿主面板里填**：
+
+- `Host.settings.get(key)` / `Host.settings.all()` 只能**读**。插件自己改不生效（下次读还是旧值）。
+- **改设置后宿主不会重连插件**。想让新值立刻生效，必须在 `onSettingsChanged(values)` 里自己重读，
+  否则插件会一直用旧配置跑 —— 表现成「插件读到的设置值永远是旧的」。
+- 判据是「`items` **非空**」：空数组 / 整段不写 = 没有「设置」按钮。
+- 和 `secureStore` 是两套数据：设置是**用户配置**（插件只读、写入权在宿主），
+  `secureStore` 是**插件凭据**（插件自己读写、用户看不见）。卸载时才好各清各的。
 
 ---
 
@@ -171,12 +186,19 @@ MQTT 也没有开箱支持 —— 要连 broker 得用 `Host.tls` 自己拼报�
   "version": "1.0.0",                 // semver
   "runtime": "js",
   "entry": "main.js",
-  "hostMinVersion": "2.0.0",
+  "hostMinVersion": "2.0.0",          // 要求的**宿主协议**版本（semver 文本）
+  "minAppVersionCode": 0,             // 要求的**应用构建号**（整数）；0 / 不写 = 不校验
   "description": "一句话说明",
   "author": "you",
   "license": "GPL-3.0-or-later",
   "permissions": ["network", "secureStore", "log"],
   "login": { "type": "form" },        // 不需要登录就整个删掉这个字段
+  "settings": {                       // 写了非空 items 才有「设置」按钮，见 Step 5
+    "title": "我的插件设置",
+    "items": [
+      { "key": "server", "type": "text", "label": "服务器地址", "default": "" }
+    ]
+  },
   "capabilities": {
     "homes": true, "devices": true,
     "scenes": false, "spec": false, "statistics": false, "messages": false,
@@ -188,6 +210,14 @@ MQTT 也没有开箱支持 —— 要连 broker 得用 `Host.tls` 自己拼报�
 
 ⚠️ **没有登录需求的插件就不要写 `login` 字段** —— 那会让卡片上出现一个「登录」按钮，
 点开是个空表单。缺省即表示「本插件不需要凭据」。
+
+⚠️ `login` / `settings` 与 `capabilities` 的**判据不同**：后者是布尔**承诺**（声明 `true` 就必须
+有实现），前者是**加法** —— 声明了什么就多什么入口，声明了却返回不出视图，宿主只会把错误显示在
+面板上，**不会**让整个插件加载失败。
+
+⚠️ `minAppVersionCode` **只接受真正的 JSON number**。写成 `"1000000"`（带引号）等同于**没写**
+（不校验），而不是「要校验 1000000」—— 因为把一个手滑写成的字符串硬转成 0，会让作者误以为卡了
+版本、实际什么都没卡，且永远不会被发现。**不确定就写 `0`。**
 
 ### Step 2 — 搭 `main.js` 骨架
 
@@ -209,6 +239,8 @@ Plugin.register({
   async getDevices(homeIds) { /* → { [did]: Device } */ },
   async getSpecForDevice(device) { return null; },
   async createTransports(device) { return []; },
+  async onSettingsChanged(values) { /* 可选；用户保存/恢复默认后，见 Step 5 */ },
+  async onSettingsAction(action, values) { /* 可选；点了 type=button 的条目 */ },
   async dispose() { /* 断开长连接、停定时器 */ }
 });
 ```
@@ -298,7 +330,81 @@ async createTransports(device) {
 可选钩子 `isTransportAvailable(transportId, device?)`：不实现则默认「可用」，
 让真正的调用去失败。想省掉注定失败的外呼（比如设备已知离线）再实现它。
 
-### Step 5 — 本地自检（**重要**）
+### Step 5 — 实现插件设置（可选）
+
+要让用户填「服务器地址 / 令牌 / 刷新间隔」这类**配置**时用 `settings`，
+**不用写任何 UI 代码** —— 你在清单里给的是**数据**，宿主用原生控件画出来（和登录视图同一个思路）。
+凭据（token 之类）不走这里，走 `secureStore`（见铁律 11）。
+
+清单里声明：
+
+```jsonc
+"settings": {
+  "title": "HA 看板设置",            // 缺省时宿主用「插件设置」
+  "items": [
+    { "key": "server",       "type": "text",     "label": "服务器地址",
+      "default": "", "placeholder": "http://homeassistant.local:8123" },
+    { "key": "token",        "type": "password", "label": "长期令牌" },
+    { "key": "maxEntities",  "type": "number",   "label": "最多显示实体数", "default": "100" },
+    { "key": "autoRefresh",  "type": "switch",   "label": "自动刷新", "default": "false" },
+    { "key": "entityFilter", "type": "select",   "label": "显示范围", "default": "all",
+      "options": [ { "value": "all", "label": "全部" }, { "value": "light", "label": "仅灯" } ] },
+    { "key": "testConn",     "type": "button",   "label": "测试连接", "action": "test" }
+  ]
+}
+```
+
+| `type` | 渲染成 | 存储形态 |
+| --- | --- | --- |
+| `text` | 单行输入框 | 字符串（**未知 `type` 一律退化成它**） |
+| `password` | 遮蔽输入框 | 字符串（**只是遮蔽，不加密存储**；敏感凭据请走 `secureStore`） |
+| `number` | 数字软键盘输入框 | 十进制文本（**不做数值校验**） |
+| `switch` | 开关 | `'true'` / `'false'`（判断写 `=== 'true'`） |
+| `select` | 下拉选择 | 选中项的 `value`（`options` 缺失或为空时退化成 `text`） |
+| `button` | 按钮 | **不占存储**，点击走 `onSettingsAction` |
+
+条目字段：`key`（**必填**，缺了整条被丢掉）/ `label`（缺省用 `key`）/
+`placeholder`（text/password/number）/ `description` / `default`（除 button）/
+`options`（select，缺 `value` 的选项被丢掉）/ `action`（button，缺省用 `key`）。
+
+**所有值都是字符串** —— 跨 ArkWeb 边界只能传字符串，存储层也统一用字符串。
+开关是 `'true'`/`'false'`，数字是十进制文本，插件侧自己 `Number()`。
+
+读（**只读**，见铁律 11）：
+
+```js
+const server = await Host.settings.get('server');   // 键不存在给空串（不抛错）
+const all    = await Host.settings.all();           // 是**对象**，别再 JSON.parse（铁律 8）
+const on     = all.autoRefresh === 'true';
+const max    = Number(all.maxEntities || '100');
+```
+
+响应变更（两个**可选**钩子，不实现的话宿主当「你没处理」吞掉，不打扰用户）：
+
+```js
+async onSettingsChanged(values) {       // 用户点「保存」/「恢复默认」之后
+  this.server = values.server || '';    // 🔴 立刻生效靠自己在这里重读 —— 宿主不会重连插件
+},
+async onSettingsAction(action, values) { // 用户点了某个 type=button 的条目
+  if (action === 'test') {
+    return { message: '连接成功' };      // 返回 { message } 会显示在面板上给用户看
+  }
+  return { message: '' };
+}
+```
+
+- `onSettingsChanged` 拿到的 `values` 是**全量**键值对象（不是「本次改动的 diff」）——
+  用户可能一次改多项，插件也往往需要完整配置才能安全地重新初始化。
+- 点「恢复默认」时传的是**空对象 `{}`**（存储被清空、界面回到 `default`），
+  这样你才能区分「用户清空了」和「用户把某项改成了默认值」。
+- 动作按钮语义是「**立刻做事**」（重登录、拉一次列表、测连通性），所以插件未连接时宿主会
+  **先帮你连一次**（连不上就把原因抛到面板上），不像「保存」那样只是落盘。
+
+> **容错方向**：设置是「有更好、没有也能用」的附加能力，所以认不出的东西**不报错、不渲染**
+> （未知类型 → 文本框、缺 `options` 的下拉 → 文本框、缺 `key` 的条目直接丢弃）。
+> 绝不因为一段设置写错就拒绝加载整个插件 —— 用户装插件是为了接设备，不是为了填表单。
+
+### Step 6 — 本地自检（**重要**）
 
 > ⚠️ **本仓库里没有 `scripts/` 目录。** 开发指南 §13 提到的
 > `simulate_plugin_load.js` / `check_bootstrap_template.js` / `verify_bootstrap_stitch.js` /
@@ -324,17 +430,19 @@ async createTransports(device) {
 **自检能提前抓到的**：`import`/`export`、加载期顶层异常、忘了 `Plugin.register`、
 钩子返回了不可序列化的东西（函数、循环引用）。
 
-### Step 6 — 真机验证
+### Step 7 — 真机验证
 
 1. 应用内点「**安装内置示例**」，确认能装上、出现卡片（不需要网络，验证宿主链路）
 2. 点「确认并启用」→ 卡片变「已连接」
 3. 点卡片上的「登录」→ 确认面板按你声明的 `login.type` 渲染
-4. 把自己的插件打包成 zip，用「**从文件导入**」装进来，对比行为差异
+4. 声明了 `settings.items` 的话，点卡片上的「**设置**」→ 确认控件按 `type` 渲染、
+   默认值正确、保存后重开面板值还在
+5. 把自己的插件打包成 zip，用「**从文件导入**」装进来，对比行为差异
 
 日志检索：`[plugin:<你的插件id>]` 是 `Host.log` 输出，`[PluginSandbox]` 是宿主侧加载过程
 （注册失败、bootstrap 失败都打在这里）。
 
-### Step 7 — 打包与发布
+### Step 8 — 打包与发布
 
 ```bash
 cd plugins/my-platform
@@ -399,6 +507,10 @@ Host.log.info(tag, msg) / Host.log.error(tag, msg)
 // 宿主缓存的设备对象，不需要额外权限
 Host.getDevice(did) → Device | null
 
+// 插件设置（用户在宿主设置面板里填的值，插件**只读**）—— 不需要额外权限
+Host.settings.get(key) → string                    // 单项；键不存在给空串
+Host.settings.all()    → Record<string, string>    // 全部；是**对象**不是 JSON 串（铁律 8）
+
 // 原始 socket（udp/tcp 需 lan，tls 需 mqtt）
 Host.udp.open/onMessage/send/close
 Host.tcp.open/onMessage/onClose/send/close
@@ -421,9 +533,9 @@ Host.tls.open({host, port, clientCert, clientKey, ca})/onMessage/onClose
 
 | 文件 | 什么时候读 |
 | --- | --- |
-| [`references/protocol.md`](references/protocol.md) | 要写 `plugin.json`、查钩子/方法签名、`Device`/`Home` 形状、stream 与 gatewayAdmin、L0 声明式、版本协商 |
-| [`references/host-bridge.md`](references/host-bridge.md) | 要调 `Host.*`：HTTP/Cookie、secureStore 形状、字节级摘要、udp/tcp/tls 的边界 |
-| [`references/troubleshooting.md`](references/troubleshooting.md) | 插件**装进去不动**、没登录按钮、一直转圈、设备离线、日志里出现奇怪报错时 |
+| [`references/protocol.md`](references/protocol.md) | 要写 `plugin.json`、查钩子/方法签名、`Device`/`Home` 形状、设置面板（`settings`）、stream 与 gatewayAdmin、L0 声明式、版本协商 |
+| [`references/host-bridge.md`](references/host-bridge.md) | 要调 `Host.*`：HTTP/Cookie、secureStore 与 settings 的读取形状、字节级摘要、udp/tcp/tls 的边界 |
+| [`references/troubleshooting.md`](references/troubleshooting.md) | 插件**装进去不动**、没有登录/设置按钮、一直转圈、设备离线、日志里出现奇怪报错时 |
 | [`../../docs/插件开发指南.md`](../../docs/插件开发指南.md) | 权威原文。分册与它冲突时，**以原文为准**（分册可能过期） |
 
 ---
@@ -442,5 +554,9 @@ Host.tls.open({host, port, clientCert, clientKey, ca})/onMessage/onClose
 - [ ] `getDevices` 返回的 key 是 `did`；返回值 JSON 可序列化（无函数、无循环引用）
 - [ ] `setProperty` / `callAction` 失败时 **throw**
 - [ ] `init()` 幂等；socket 回调在 `init()` 里注册
+- [ ] 声明了 `settings.items` 的话：每条都有 `key`，`select` 有非空 `options`，`default` 写了
+- [ ] 设置只读读取；`Host.settings.all()` 没有套 `JSON.parse`
+- [ ] 需要「改设置立刻生效」的，在 `onSettingsChanged` 里重读了配置
+- [ ] `minAppVersionCode` 写的是 JSON number（不确定就写 `0`）
 - [ ] 实现了 `dispose()`，停掉定时器 / 关掉 socket
 - [ ] 打包后 zip 根下直接是 `plugin.json`（没有多套一层目录）

@@ -24,7 +24,7 @@
 - `scripts/verify_invoke_handshake.js`
 
 **不在 miha_plugin 仓库里**（这个仓库只有 `docs/` 和 `plugins/`）。它们属于**宿主工程**。
-拿到宿主工程之前，用 SKILL.md §Step 5 里那套「假 `Plugin` / `Host` 跑一遍 + `node --check`」替代。
+拿到宿主工程之前，用 SKILL.md §Step 6 里那套「假 `Plugin` / `Host` 跑一遍 + `node --check`」替代。
 
 其中 `check_bootstrap_template.js` 和 `verify_bootstrap_stitch.js` / `verify_invoke_handshake.js`
 测的是**宿主自己的代码**（`PluginSandbox.ets` 的模板字符串和握手时序），
@@ -77,6 +77,18 @@
 | `init` 正常但登录后设备全空 | `secureStore.get` 读回来是**对象**，代码只写了 `JSON.parse(stored)`。见 `host-bridge.md` §3 |
 | 相机直播无限转圈 | `getStreamUrl` 返回了凑数的地址。**对没能力的机型抛错才是正确行为** |
 | 网关管理页一片空白 | 数值字段给了 `null`（应给 `-1`）；`blocked` 没归一化成布尔 |
+
+### 设置面板（`settings`）
+
+| 症状 | 先查这里 |
+| --- | --- |
+| 卡片上**没有**「设置」按钮 | `plugin.json` 的 `settings.items` 是空的 / 整段没写；卡片处于「不兼容」状态时也不给。见 `protocol.md` §9.1 |
+| 设置面板打开全是空输入框 | 声明里没写 `default`，且用户从没保存过。面板会把 `default` 与已保存值合并显示，空说明两者都没有 —— 去补 `default` |
+| 某项**点开就报错** / 显示成文本框 | 该条目的 `type` 写成了协议外的值（只认 text / password / number / switch / select / button），未知类型会退化成文本框。`select` 还要有非空的 `options` |
+| 某条设置**完全看不见** | 条目没写 `key` —— 没有 `key` 的条目会被宿主直接丢掉；`select` 里缺 `value` 的选项同理 |
+| 插件读到的设置值**永远是旧的** | 设置是**只读**的，且宿主**不会**因为改了设置就重连插件 —— `init()` 不会重跑。要立刻生效，必须在 `onSettingsChanged(values)` 里重读。见 `host-bridge.md` §3.1 |
+| `Host.settings.all()` 抛「不是合法 JSON」 | 它的结果已经是**对象**，别再套 `JSON.parse`。见 `host-bridge.md` §3.1 |
+| 点了动作按钮没反应 / 提示「插件未连接」 | 宿主会先尝试连接插件再调 `onSettingsAction`。连不上说明插件本身有问题，看提示里冒号后面的原因 |
 
 ### 调用过程中的报错
 

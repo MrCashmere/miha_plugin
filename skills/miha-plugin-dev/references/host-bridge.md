@@ -21,6 +21,10 @@ Host.httpForm(url, headers, fields)      → Promise<{ status, body, headers, co
 // ── 私有存储（需 secureStore，按 pluginId 隔离）
 Host.secureStore.get(key) / set(key, value) / delete(key)
 
+// ── 插件设置（用户在宿主设置面板里填的值，插件**只读**）—— 不需要额外权限
+Host.settings.get(key) → string                   // 单项；键不存在给空串
+Host.settings.all()    → Record<string, string>   // 全部；是**对象**不是 JSON 串，见 §3.1
+
 // ── 加密（需 crypto）
 Host.crypto.sha1Hex(s) / sha256Hex(s) / sha256Base64(s)
 Host.crypto.sha1BytesBase64(b64) / sha256BytesBase64(b64)   // 字节级，见 §4
@@ -132,6 +136,37 @@ const data = (typeof stored === 'string') ? JSON.parse(stored) : stored;   // �
 
 只写 `JSON.parse(stored)` 的后果：对象被 `String()` 成 `"[object Object]"` 再抛语法错误 ——
 `init` 静默 `return false`，**登录后家庭 / 设备全空**。
+
+---
+
+## 3.1 `Host.settings`（插件设置，**只读**）
+
+用户在宿主设置面板里填的值 —— 由你在 `plugin.json` 的 `settings.items` 里声明、
+宿主用原生控件渲染（协议见 [`protocol.md`](protocol.md) §9）。**不需要额外权限。**
+
+```ts
+Host.settings.get(key) → Promise<string>                 // 单项；键不存在给空串
+Host.settings.all()    → Promise<Record<string,string>>  // 全部
+```
+
+| 要点 | 说明 |
+| --- | --- |
+| **只读** | 写入方是**宿主 UI**。插件改了不生效（下次读还是旧值）—— 这是刻意设计 |
+| `all()` 是**对象** | 铁律 8：以 `{` 开头会被拆包层 parse 成对象，**别再套 `JSON.parse`** |
+| 值一律字符串 | 开关是 `'true'`/`'false'`，数字是十进制文本，自己 `Number()` |
+| 空串 = 没填 | `get` 对不存在的键给空串而不是抛错，用 `if (!v)` 判断即可 |
+| 与 `secureStore` 分工 | 这里是**用户配置**（用户能改、能删）；凭据走 `secureStore`，用户看不到 |
+
+```js
+const all = await Host.settings.all();
+const server = all.server || '';
+const max    = Number(all.maxEntities || '100');
+const auto   = all.autoRefresh === 'true';
+```
+
+⚠️ **读设置要在 `init` 里做一次并缓存进内存**。设置不是设备属性，改动是低频事件；
+每次拉设备都去读一遍没有意义，而且会读到「半新半旧」的组合。
+「用户改完立刻生效」用 `onSettingsChanged`（见 `protocol.md` §9.3），宿主**不会**替你重连插件。
 
 ---
 

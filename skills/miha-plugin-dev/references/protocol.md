@@ -14,14 +14,21 @@
   "version": "1.0.0",                 // semver
   "runtime": "js",                    // "js"（有代码）| "declarative"（纯 JSON，见 §7）
   "entry": "main.js",
-  "hostMinVersion": "2.0.0",          // 要求的最低宿主版本
+  "hostMinVersion": "2.0.0",          // 要求的**宿主协议**版本（semver 文本），见 §6
+  "minAppVersionCode": 0,             // 要求的**应用构建号**（JSON number）；0 / 不写 = 不校验，见 §6
   "description": "一句话说明",
   "author": "you",
   "homepage": "https://github.com/you/repo",
   "license": "MIT",
 
-  "permissions": ["network", "secureStore", "crypto"],   // 见 §3
-  "login": { "type": "qr" },                              // qr | web | form，见 §5
+  "permissions": ["network", "secureStore", "crypto"],   // 见 §2
+  "login": { "type": "qr" },                              // qr | web | form，见 §4；不写 = 不需要登录
+  "settings": {                                           // items 非空才有「设置」按钮，见 §9
+    "title": "我的插件设置",
+    "items": [
+      { "key": "server", "type": "text", "label": "服务器地址", "default": "" }
+    ]
+  },
   "capabilities": {                                       // 宿主据此显示/隐藏入口
     "homes": true,
     "devices": true,
@@ -421,15 +428,39 @@ async gatewayReboot(device) { /* 重启网关 */ }
 
 ---
 
-## 6. 版本协商
+## 6. 版本协商（两条独立的线）
 
-宿主加载插件前检查两件事，任一不满足就拒绝加载并给出可读提示：
+宿主在**展示卡片**和**连接插件**时各校一遍，任一不满足就把卡片标成「不兼容」并给出可读提示，
+**不会**让应用崩溃 —— 用户的设备列表仍然从缓存里读，不会白屏。
 
-1. `plugin.schemaVersion` ≤ 宿主支持的最大 schema 版本（当前 **1**）
-2. `plugin.hostMinVersion` ≤ 宿主当前版本
+| 字段 | 比的是什么 | 缺省 | 什么时候用它 |
+| --- | --- | --- | --- |
+| `hostMinVersion` | **宿主协议版本**（semver 文本，比前三位数字） | `1.0.0` | 你用了某个只有新版宿主才有的**桥 / 钩子 / 能力**时 |
+| `minAppVersionCode` | **应用构建号**（`AppScope/app.json5` 的 `versionCode`，纯整数） | `0` = **不校验** | 你依赖某个只有特定构建才有的**原生行为**时 |
 
-宿主升级导致旧插件不兼容时，插件会被标记为「需要更新」而不是崩溃 ——
-用户的设备列表仍然从缓存读，不会白屏。
+```jsonc
+{
+  "hostMinVersion": "2.0.0",       // 要求宿主协议 ≥ 2.0.0
+  "minAppVersionCode": 1000160     // 要求应用构建号 ≥ 1000160；不写 = 不校验
+}
+```
+
+关于 `minAppVersionCode` 有**三点**必须记住：
+
+1. **不写、写 `0`、或写成非数字，一律等于不校验。** 宿主只接受真正的 JSON number ——
+   `"1000000"`（带引号）会被当成「没写」，而不是「要校验 1000000」。
+   这么设计是因为失败模式：一个手滑写成字符串的值若被硬转成 0，插件作者会以为自己在卡版本、
+   实际什么都没卡，而且**永远不会有人发现**。
+2. **应用版本号读不出来时（系统调用失败），宿主不会卡任何插件** —— 拿不到就退回「不知道」，
+   而不是「版本极低」。否则一次偶发失败会把所有插件一次性判成不兼容，用户什么都没法用
+   还看不出原因。
+3. `hostMinVersion` 在**解析清单时**就会抛错（清单非法，插件根本装不进）；
+   `minAppVersionCode` 只影响**卡片状态**（装得进去、看得见、连不上），
+   因为「应用版本偏低」可以靠升级应用解决，不该阻止插件被安装。
+
+> 两者都只是**声明**：写高了老用户装不上，写低了插件会在运行时莫名失败。
+> 经验做法 —— `hostMinVersion` 跟着你实际用到的桥的能力走；`minAppVersionCode` 几乎都写 `0`，
+> 只在确有必要时（例如依赖某个后加的原生桥）才填宿主发布时告诉你的构建号。
 
 ---
 
@@ -483,3 +514,119 @@ manifest 里填 `publicKey`；宿主默认只自动信任内置白名单仓库�
 **现实情况**：现在**任何**来源的插件装上后都走同一套「展示权限 → 用户确认 → 启用」流程，
 没有额外的签名门槛。因此**只装你信得过的来源**。别在插件里填 `publicKey` —— 
 宿主目前会忽略它，填了不会报错，也不会更安全。
+
+---
+
+## 9. 插件设置（`settings`）
+
+在 `plugin.json` 里**声明**一个设置界面，宿主用**原生控件**把它画出来。
+你不写任何 UI 代码 —— 给的是**数据**（标题 / 默认值 / 选项），和登录视图（§4）同一套思路。
+想要完全自由的界面请走数据面，不属于设置。
+
+**判据是 `items` 非空**：空数组、整段缺失都等价于「没有设置界面」，
+卡片上**不会**出现「设置」按钮。（和 `login` 一样是加法，不是承诺。）
+
+```jsonc
+{
+  "settings": {
+    "title": "HA 看板设置",           // 缺省时宿主用「插件设置」
+    "items": [
+      { "key": "server",       "type": "text",     "label": "服务器地址",
+        "default": "", "placeholder": "http://homeassistant.local:8123" },
+      { "key": "token",        "type": "password", "label": "长期令牌" },
+      { "key": "maxEntities",  "type": "number",   "label": "最多显示实体数",
+        "default": "100", "description": "实体太多时可在这里限制数量" },
+      { "key": "autoRefresh",  "type": "switch",   "label": "自动刷新", "default": "false" },
+      { "key": "entityFilter", "type": "select",   "label": "显示范围", "default": "all",
+        "options": [ { "value": "all", "label": "全部" }, { "value": "light", "label": "仅灯" } ] },
+      { "key": "testConn",     "type": "button",   "label": "测试连接", "action": "test" }
+    ]
+  }
+}
+```
+
+### 9.1 六种控件
+
+| `type` | 渲染成 | 存储形态 | 备注 |
+| --- | --- | --- | --- |
+| `text` | 单行输入框 | 任意字符串 | **未知 `type` 一律退化成它** |
+| `password` | 遮蔽输入框 | 任意字符串 | 只是遮蔽，**不加密存储**；敏感凭据请走 `secureStore` |
+| `number` | 数字软键盘输入框 | 十进制文本 | 不做数值校验 |
+| `switch` | 开关 | `'true'` / `'false'` | 判断写 `v === 'true'` |
+| `select` | 下拉选择 | 选中项的 `value` | `options` 缺失/为空时**退化成 `text`** |
+| `button` | 按钮 | **不占存储** | 点击回调 `onSettingsAction`，见 §9.3 |
+
+条目字段：
+
+| 字段 | 适用 | 说明 |
+| --- | --- | --- |
+| `key` | 全部（**必填**） | 存值用的键；`button` 时也作动作标识。**没有 `key` 的条目会被丢掉** |
+| `type` | 全部 | 见上表；协议外的值退化成 `text` |
+| `label` | 全部 | 显示标题；缺省时用 `key` |
+| `placeholder` | text / password / number | 输入框占位提示 |
+| `description` | 全部 | 控件下方的说明文字 |
+| `default` | 除 `button` 外 | 初值（**字符串形态**） |
+| `options` | select | `[{ value, label }]`；**没有 `value` 的选项会被丢掉** |
+| `action` | button | 回调时带的动作标识；缺省时用 `key` |
+
+> **所有值都是字符串。** 开关是 `'true'` / `'false'`，数字是十进制文本 ——
+> 跨 ArkWeb 边界只能传字符串，「你在输入框里看到的」和「插件读到的」是同一个东西。
+>
+> **容错方向**：设置是「有更好、没有也能用」的附加能力，所以认不出来的东西
+> **不报错、不渲染**。绝不因为一段设置写错就拒绝加载整个插件。
+
+### 9.2 插件侧读取（**只读**）
+
+```js
+const server = await Host.settings.get('server');   // 键不存在给空串，不抛错
+const all    = await Host.settings.all();           // 键值**对象**，不是 JSON 串
+const max    = Number(all.maxEntities || '100');
+const auto   = all.autoRefresh === 'true';
+```
+
+宿主设置面板是**唯一的写入方**。插件改了不生效 —— 需要「改完立刻响应」用下面的钩子。
+
+> ⚠️ `Host.settings.all()` 的结果以 `{` 开头，会被桥的拆包层 parse 成**对象**返回。
+> **别再套一层 `JSON.parse`** —— 对象会被 `String()` 成 `[object Object]` 再抛语法错误，
+> 而 `init` 惯于吞异常，表现成「插件莫名没连上」。铁律 8 说的就是这个坑。
+
+> 与 `secureStore` 的分工：这里存的是**用户配置**（插件只读、宿主 UI 写）；
+> `secureStore` 存的是**插件凭据**（插件自己读写、用户看不到）。分开存，
+> 「用户可以删的」和「用户不应该碰到」的两类数据才各自安全。
+
+### 9.3 两个可选钩子
+
+| 时机 | 宿主调什么 | 参数 |
+| --- | --- | --- |
+| 点「保存」 | `onSettingsChanged(values)` | **全量**键值对象 |
+| 点「恢复默认」 | `onSettingsChanged({})` | **空对象**（存储已清空） |
+| 点某个动作按钮 | `onSettingsAction(action, values)` | 动作标识 + 全量键值对象 |
+
+```js
+Plugin.register({
+  // ……其余钩子……
+
+  // 保存 / 重置之后调用；values 是「声明 default ⊕ 用户已存值」的全量结果。
+  // 宿主**不会**因为你改了设置就重连插件（重连会断掉正在跑的会话），
+  // 需要立刻生效就在这里自己重读。
+  async onSettingsChanged(values) {
+    this.server = values.server || '';
+    await Host.log.info('myplugin', '设置已更新');
+  },
+
+  // 动作按钮。返回 { message } 会显示在面板底部给用户看 ——
+  // 这是插件对用户说话的通道（插件没有自己的界面）。抛错同样会把错误文本显示出来。
+  async onSettingsAction(action, values) {
+    if (action !== 'test') return { message: '未知操作：' + action };
+    const res = await Host.http('GET', values.server + '/api/', { ... });
+    return { message: res.status === 200 ? '连接成功' : ('失败：HTTP ' + res.status) };
+  }
+});
+```
+
+两个钩子都**可以不实现**（宿主会静默跳过）。但**声明了 `button` 就必须实现
+`onSettingsAction`**，否则用户点了只会看到报错。
+
+> `onSettingsChanged` 给的是**全量**而不是 diff：用户可能一次改多项，
+> 而插件往往需要读到完整配置才能安全地重新初始化。重置时传空对象，
+> 是为了让插件能区分「用户清空了」和「用户把某项改回了默认值」。
