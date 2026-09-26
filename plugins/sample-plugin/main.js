@@ -19,9 +19,78 @@
  *
  * 4. `Host.crypto` 里**没有 rc4**（系统加密库不支持）。需要 RC4 的话
  *    在插件内部自己实现，十来行的事。
+ *
+ * 5. 插件可以声明 `settings`（见 plugin.json），宿主会画出设置面板，但插件
+ *    **只能读**（`Host.settings`）—— 写入权在宿主 UI 里。注意它和 secureStore
+ *    的分工：设置存**用户配置**（用户填、插件读），secureStore 存**插件凭据**
+ *    （插件自己读写、用户看不见）。
  */
 
 let auth = null;
+
+/**
+ * 用户在宿主设置面板里填的值，插件**只读**。
+ *
+ * 这是「用户配置」；`secureStore` 里那份凭据是「插件凭据」。两者分开的好处
+ * 在卸载时才看得见：用户填的东西你删不掉，你存的凭据用户也看不到。
+ */
+let settings = { autoRefresh: true, maxEntities: 100, entityFilter: 'all' };
+
+/** 清单里声明的 default —— 用户点「恢复默认」时宿主传空对象，插件按这份回落 */
+const DECLARED_DEFAULTS = { autoRefresh: 'true', maxEntities: '100', entityFilter: 'all' };
+
+/** `entityFilter` 认得的取值；对不上任何一项时当 all，免得用户看到一个空列表 */
+const FILTERS = ['all', 'light', 'switch', 'sensor'];
+
+/**
+ * 关掉自动刷新后，上一次的结果最多复用多久。
+ *
+ * 默认是**开**自动刷新（DECLARED_DEFAULTS 里是 'true'）—— 样例开箱就要能看到
+ * 实时数据，不然读的人容易把「30 秒内的缓存」误当成「插件坏了不刷新」。
+ */
+const CACHE_TTL_MS = 30000;
+
+/** 上一次从 HA 拿到的实体列表。纯插件内部缓存，和设置无关 */
+let stateCache = null;
+
+/**
+ * 从一份键值对象里取值：键**不存在**时回落到清单声明的 default。
+ *
+ * 「键不存在」和「值是空串」必须分开看待 —— 前者是「用户没动过这一项」，
+ * 后者是「用户把它清空了」，插件对这两种情况的处理往往不一样。
+ */
+function pick(values, key) {
+  const raw = values ? values[key] : undefined;
+  return (typeof raw === 'string') ? raw : DECLARED_DEFAULTS[key];
+}
+
+/** 把一份键值对象归一化成插件内部用的形状 */
+function normalizeSettings(values) {
+  const limit = Number(pick(values, 'maxEntities'));
+  const filter = pick(values, 'entityFilter');
+  return {
+    autoRefresh: pick(values, 'autoRefresh') === 'true',
+    // number 控件不做数值校验，脏值/空串一律当「不限制」（0）
+    maxEntities: (isFinite(limit) && limit > 0) ? Math.floor(limit) : 0,
+    entityFilter: FILTERS.indexOf(filter) >= 0 ? filter : 'all'
+  };
+}
+
+/**
+ * 读一次宿主里的设置。
+ *
+ * 读不到就按 default 跑 —— 设置是「有更好、没有也能用」的附加能力，
+ * 不该因为它出问题就让整个插件起不来。
+ */
+async function loadSettings() {
+  try {
+    // ⚠️ all() 回来的**已经是对象**，别再 JSON.parse（拆包层会 parse 一遍）
+    const all = await Host.settings.all();
+    return normalizeSettings(all);
+  } catch (e) {
+    return normalizeSettings(null);
+  }
+}
 
 /** 读取已保存的凭据，并顺手校验一下还能不能用 */
 async function loadAuth() {
@@ -41,6 +110,9 @@ Plugin.register({
    * 返回 true = 已连接可用；false = 需要登录（宿主会在卡片上显示「未连接」）。
    */
   async init() {
+    // 宿主在每次调数据面方法前都会调 init()，所以在这里重读设置 = 永远拿最新值。
+    // （它也是「改了设置怎么立刻生效」最省事的答案，见 onSettingsChanged 的注释）
+    settings = await loadSettings();
     auth = await loadAuth();
     if (!auth) return false;
     await Host.log.info('sample', '凭据已载入，目标 ' + auth.host);
@@ -156,28 +228,63 @@ Plugin.register({
       return {};
     }
 
-    const res = await Host.http('GET', auth.host + '/api/states', {
-      'Authorization': 'Bearer ' + auth.token
-    });
-    if (res.status !== 200) {
-      await Host.log.error('sample', '取实体失败 HTTP ' + res.status);
-      return {};
-    }
+    // 「自动刷新」关掉时，30 秒内的重复请求复用上一次的结果；开着就每次重新取。
+    // 注意插件**没法**要求宿主刷新界面（协议里没这个口子），这个开关能控制的
+    // 只是「插件自己要不要省掉这次 HTTP」，控制不了宿主何时来取。
+    const reuse = !settings.autoRefresh && stateCache !== null
+      && (Date.now() - stateCache.at) < CACHE_TTL_MS;
 
     let states;
-    try {
-      states = JSON.parse(res.body);
-    } catch (e) {
-      await Host.log.error('sample', '返回内容不是 JSON');
-      return {};
+    if (reuse) {
+      states = stateCache.states;
+    } else {
+      const res = await Host.http('GET', auth.host + '/api/states', {
+        'Authorization': 'Bearer ' + auth.token
+      });
+      if (res.status !== 200) {
+        await Host.log.error('sample', '取实体失败 HTTP ' + res.status);
+        return {};
+      }
+
+      try {
+        states = JSON.parse(res.body);
+      } catch (e) {
+        await Host.log.error('sample', '返回内容不是 JSON');
+        return {};
+      }
+      if (!(states instanceof Array)) return {};
+      stateCache = { states: states, at: Date.now() };
     }
-    if (!(states instanceof Array)) return {};
+
+    // 筛选与截断每次都按**当前**设置重算，所以用户在面板里改完，下一次取设备
+    // 就生效了 —— 不需要宿主重连插件，也不受上面那份缓存的影响。
+    const wanted = [];
+    for (let j = 0; j < states.length; j++) {
+      const raw = states[j];
+      const rawDid = raw.entity_id;
+      if (!rawDid) continue;
+      if (settings.entityFilter !== 'all'
+        && rawDid.indexOf(settings.entityFilter + '.') !== 0) continue;
+      wanted.push(raw);
+    }
+
+    // 先排序再截断：不然「最多显示 N 个」每次截到的可能是不同的实体
+    wanted.sort(function (a, b) {
+      if (a.entity_id < b.entity_id) return -1;
+      if (a.entity_id > b.entity_id) return 1;
+      return 0;
+    });
+
+    const limit = settings.maxEntities;
+    const picked = (limit > 0) ? wanted.slice(0, limit) : wanted;
+    if (limit > 0 && wanted.length > limit) {
+      await Host.log.info('sample', '按设置截断 ' + wanted.length + ' → ' + picked.length);
+    }
 
     const out = {};
-    for (let i = 0; i < states.length; i++) {
-      const s = states[i];
+    for (let i = 0; i < picked.length; i++) {
+      const s = picked[i];
       const did = s.entity_id;
-      if (!did) continue;
       const attrs = s.attributes || {};
       out[did] = {
         did: did,
@@ -195,7 +302,8 @@ Plugin.register({
         subDevices: {}
       };
     }
-    await Host.log.info('sample', '载入 ' + Object.keys(out).length + ' 个实体');
+    await Host.log.info('sample',
+      '载入 ' + Object.keys(out).length + ' 个实体（筛选 ' + settings.entityFilter + '）');
     return out;
   },
 
@@ -310,8 +418,53 @@ Plugin.register({
     return { called: true, siid: siid, aiid: aiid };
   },
 
-  /** ⑫ 销毁：清掉内存里的凭据。宿主禁用或卸载时会调 */
+  /**
+   * ⑫ 设置变更（可选钩子）。用户点「保存」或「恢复默认」之后调用。
+   *
+   * ⚠️ 宿主**不会**因为设置变了就重连插件 —— `init()` 不会重跑。想让新值立刻
+   * 生效，只能在这里自己接住。（本插件把筛选/截断留到 getDevices 里实时计算，
+   * 所以这里更新缓存就够了；若你的配置要重建连接或重算 token，就在这里做。）
+   *
+   * `values` 是**全量**键值对象（不是本次改动的 diff），可以安全地重建整份配置；
+   * 点「恢复默认」时它是**空对象** `{}`（存储被清空），此时按声明的 default 回落。
+   */
+  async onSettingsChanged(values) {
+    settings = normalizeSettings(values);
+    await Host.log.info('sample', '设置已更新: ' + JSON.stringify(settings));
+  },
+
+  /**
+   * ⑬ 设置里的动作按钮（可选钩子）。`action` 是条目上写的 `action`（缺省用 `key`）。
+   *
+   * 这里实现「测试连接」：用已保存的凭据打一次 HA 的 /api/。
+   * 返回的 `{ message }` 会直接显示在设置面板上，所以**别抛错** ——
+   * 「连不上」是用户要看的结论，不是异常。
+   */
+  async onSettingsAction(action, values) {
+    if (action !== 'test') {
+      // 认不出的动作回一句空话，别装死也别报错
+      return { message: '' };
+    }
+    // 动作按钮同样会带全量设置过来，先同步一次，保证测的就是面板上现在这份配置
+    settings = normalizeSettings(values);
+    if (!auth) {
+      return { message: '还没登录，请先在卡片上点「登录」' };
+    }
+    try {
+      const res = await Host.http('GET', auth.host + '/api/', {
+        'Authorization': 'Bearer ' + auth.token
+      });
+      if (res.status === 200) return { message: '连接成功（' + auth.host + '）' };
+      if (res.status === 401) return { message: '令牌已失效，请重新登录' };
+      return { message: '失败：HTTP ' + res.status };
+    } catch (e) {
+      return { message: '失败：' + ((e && e.message) ? e.message : String(e)) };
+    }
+  },
+
+  /** ⑭ 销毁：清掉内存里的凭据与缓存。宿主禁用或卸载时会调 */
   async dispose() {
     auth = null;
+    stateCache = null;
   }
 });

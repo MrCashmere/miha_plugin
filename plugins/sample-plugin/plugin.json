@@ -2,17 +2,55 @@
   "schemaVersion": 1,
   "id": "sample-ha-readonly",
   "name": "示例：HA 看板",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "runtime": "js",
   "entry": "main.js",
   "hostMinVersion": "2.0.0",
-  "description": "内置示例插件。填入 Home Assistant 的地址与长期令牌，即可把实体列表当作设备显示并可开关。用来验证「安装 → 登录 → 设备上首页 → 控制」整条链路。",
+  "description": "内置示例插件。填入 Home Assistant 的地址与长期令牌，即可把实体列表当作设备显示并可开关。用来验证「安装 → 登录 → 设备上首页 → 控制」整条链路，并演示 settings 声明式设置面板（switch / number / select / button 四种控件）。",
   "author": "miha 内置示例",
   "homepage": "",
   "license": "GPL-3.0-or-later",
   "permissions": ["network", "secureStore", "log"],
   "login": {
     "type": "form"
+  },
+  "settings": {
+    "title": "HA 看板设置",
+    "items": [
+      {
+        "key": "autoRefresh",
+        "type": "switch",
+        "label": "自动刷新",
+        "default": "true",
+        "description": "开启后每次取设备都向 HA 重新请求（数据总是最新）；关闭则复用 30 秒内的上一次结果，省流量。注意插件无法主动刷新界面，这个开关只影响插件自己怎么取数。"
+      },
+      {
+        "key": "maxEntities",
+        "type": "number",
+        "label": "最多显示实体数",
+        "default": "100",
+        "description": "按实体 ID 排序后截断，顺序稳定。留空或填 0 表示不限制。"
+      },
+      {
+        "key": "entityFilter",
+        "type": "select",
+        "label": "显示范围",
+        "default": "all",
+        "options": [
+          { "value": "all", "label": "全部实体" },
+          { "value": "light", "label": "仅灯" },
+          { "value": "switch", "label": "仅开关" },
+          { "value": "sensor", "label": "仅传感器" }
+        ]
+      },
+      {
+        "key": "testConn",
+        "type": "button",
+        "label": "测试连接",
+        "action": "test",
+        "description": "用已保存的凭据访问一次 HA 的 /api/。"
+      }
+    ]
   },
   "capabilities": {
     "homes": true,
